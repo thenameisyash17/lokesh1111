@@ -1,69 +1,50 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Face-Look — Full Robust MVP</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Face Look — Shape Detection + Strict Acceptance</title>
 <style>
-  :root{--bg:#071024;--muted:#94a3b8;--ok:#22c55e;--bad:#ef4444;--accent:#06b6d4}
-  html,body{height:100%;margin:0;font-family:Inter,system-ui,Arial;background:linear-gradient(180deg,#071024,#071a2a);color:#e6eef6}
-  .wrap{max-width:1000px;margin:20px auto;padding:18px}
-  .cols{display:flex;gap:16px;align-items:flex-start}
-  .stage{position:relative;width:640px;height:480px;background:#000;border-radius:10px;overflow:hidden;flex:0 0 640px}
-  canvas{position:absolute;left:0;top:0}
-  #previewCanvas{background:#020718}
-  .overlay{pointer-events:none}
-  .controls{flex:1;min-width:300px}
-  .card{background:rgba(255,255,255,0.03);padding:12px;border-radius:10px}
-  label{display:block;color:var(--muted);font-size:13px;margin-top:8px}
-  input[type=file],button,select,input[type=range],input[type=color]{width:100%;padding:8px;border-radius:6px;background:transparent;border:1px solid rgba(255,255,255,0.06);color:inherit}
-  .row{display:flex;gap:8px;margin-top:10px}
-  .banner{padding:12px;border-radius:8px;margin-top:10px;text-align:center;font-weight:700}
-  .ok{background:var(--ok);color:#042014}
+  :root{--ok:#22c55e;--bad:#ef4444;--muted:#94a3b8}
+  html,body{height:100%;margin:0;font-family:Inter,Arial;background:#071024;color:#e6eef6}
+  .wrap{max-width:980px;margin:28px auto;padding:18px;border-radius:12px}
+  .top{display:flex;gap:16px}
+  .stage{position:relative;width:640px;height:480px;background:#000;border-radius:12px;overflow:hidden}
+  canvas{position:absolute;left:0;top:0;width:100%;height:100%}
+  .controls{flex:1;min-width:300px;padding:8px}
+  .card{background:rgba(255,255,255,0.03);padding:12px;border-radius:8px}
+  input,button,select{width:100%;padding:8px;border-radius:6px;background:transparent;border:1px solid rgba(255,255,255,0.06);color:inherit}
+  .banner{padding:10px;border-radius:8px;margin-bottom:10px;text-align:center;font-weight:700}
+  .ok{background:var(--ok);color:#051014}
   .bad{background:var(--bad);color:#fff}
+  pre{background:#041018;padding:8px;border-radius:6px;max-height:200px;overflow:auto}
   .small{font-size:13px;color:var(--muted);margin-top:8px}
-  pre{background:#041018;padding:10px;border-radius:8px;max-height:220px;overflow:auto}
-  #spinner{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);padding:8px 12px;border-radius:8px;background:rgba(0,0,0,0.6);display:none}
+  .shape{font-size:18px;font-weight:700;margin-top:8px}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="cols">
-    <div class="stage" id="stage">
-      <canvas id="previewCanvas" width="640" height="480"></canvas>
-      <canvas id="overlay" class="overlay" width="640" height="480"></canvas>
-      <div id="spinner">Analyzing…</div>
-      <div id="banner" style="display:none"></div>
+  <div class="top">
+    <div class="stage card" id="stage">
+      <canvas id="preview" width="640" height="480"></canvas>
+      <canvas id="overlay" width="640" height="480" style="pointer-events:none"></canvas>
+      <div id="banner" style="display:none" class="banner"></div>
     </div>
-
     <div class="controls">
       <div class="card">
-        <label>Upload photo (≤8MB)</label>
+        <label>Upload image (≤8MB)</label>
         <input id="upload" type="file" accept="image/*">
-
-        <label>Area threshold (%)</label>
-        <input id="areaRange" type="range" min="0.5" max="10" step="0.5" value="3">
-        <div class="small" id="areaLabel">3%</div>
-
-        <label>Blur threshold (Laplacian variance)</label>
-        <input id="blurRange" type="range" min="10" max="1000" step="10" value="100">
-        <div class="small" id="blurLabel">100</div>
-
-        <label>Angle thresholds (deg)</label>
-        <div class="row">
-          <input id="rollThresh" type="number" value="20" min="0" style="flex:1" />
-          <input id="yawThresh" type="number" value="0.06" min="0" step="0.01" style="flex:1" />
-        </div>
-
-        <div class="row">
+        <label class="small">Face area threshold (%)</label>
+        <input id="area" type="range" min="0.5" max="10" step="0.5" value="3">
+        <div id="areaLabel" class="small">3%</div>
+        <div style="display:flex;gap:8px;margin-top:10px">
           <button id="recheck">Re-check</button>
           <button id="clear">Clear</button>
         </div>
-
-        <div class="small">Rules enforced: exactly one face, area ≥ threshold, core landmarks present, blur above threshold, roll | yaw within allowed thresholds.</div>
-
-        <label class="small">Result JSON</label>
-        <pre id="jsonOut">{}</pre>
+        <div class="shape" id="shapeText">Face shape: —</div>
+        <div class="small">Result (JSON)</div>
+        <pre id="out">{} </pre>
+        <div class="small">Shape classification uses three horizontal widths (top/cheek/jaw) and length/width ratios. It's heuristic — verify with several photos.</div>
       </div>
     </div>
   </div>
@@ -73,369 +54,338 @@
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
 
 <script>
-/* ====== DOM helpers ====== */
+/* Helpers & DOM */
 const $ = id => document.getElementById(id);
-const preview = $('previewCanvas'); const pctx = preview.getContext('2d');
-const overlay = $('overlay'); const ctx = overlay.getContext('2d');
-const upload = $('upload'); const spinner = $('spinner'); const banner = $('banner');
-const jsonOut = $('jsonOut');
-const areaRange = $('areaRange'); const areaLabel = $('areaLabel');
-const blurRange = $('blurRange'); const blurLabel = $('blurLabel');
-const recheckBtn = $('recheck'); const clearBtn = $('clear');
-const rollThreshInput = $('rollThresh'); const yawThreshInput = $('yawThresh');
+const preview = $('preview'), pctx = preview.getContext('2d');
+const overlay = $('overlay'), octx = overlay.getContext('2d');
+const upload = $('upload'), out = $('out'), banner = $('banner');
+const area = $('area'), areaLabel = $('areaLabel'), shapeText = $('shapeText');
+let uploadedCanvas = null;
 
-areaRange.addEventListener('input', ()=> areaLabel.textContent = areaRange.value + '%');
-blurRange.addEventListener('input', ()=> blurLabel.textContent = blurRange.value);
+area.addEventListener('input', ()=> areaLabel.textContent = area.value + '%');
 
-/* ====== Model + state ====== */
-let sourceCanvas = null; // canonical rotated image canvas (natural resolution)
-let lastResult = {};
-const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
-
-/* FaceMesh */
-const faceMesh = new FaceMesh({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
-faceMesh.setOptions({maxNumFaces:2, refineLandmarks:true, minDetectionConfidence:0.5, minTrackingConfidence:0.5});
-faceMesh.onResults(handleResults);
-
-/* ====== EXIF orientation utility (minimal) ====== */
-async function readImageOrientation(file){
-  if (!file || !file.type || (!file.type.includes('jpeg') && !file.type.includes('jpg'))) return 1;
-  const arr = await file.arrayBuffer();
-  const view = new DataView(arr);
-  if (view.getUint16(0, false) !== 0xFFD8) return 1;
-  let offset = 2, len = view.byteLength;
-  while (offset < len) {
-    const marker = view.getUint16(offset, false);
-    offset += 2;
-    if (marker === 0xFFE1) {
-      const exifHeader = getString(view, offset+2, 4);
-      if (exifHeader !== 'Exif') return 1;
-      const tiffOffset = offset + 10;
-      const little = view.getUint16(tiffOffset, false) === 0x4949;
-      const firstIFD = view.getUint32(tiffOffset + 4, little);
-      let dirOffset = tiffOffset + firstIFD;
-      const entries = view.getUint16(dirOffset, little);
-      dirOffset += 2;
-      for (let i=0;i<entries;i++){
-        const tag = view.getUint16(dirOffset + i*12, little);
-        if (tag === 0x0112) {
-          const val = view.getUint16(dirOffset + i*12 + 8, little);
-          return val;
-        }
-      }
-    } else {
-      offset += view.getUint16(offset, false);
-    }
-  }
-  return 1;
+function showBanner(ok, text){
+  banner.style.display = 'block';
+  banner.className = ok ? 'banner ok' : 'banner bad';
+  banner.textContent = text;
 }
-function getString(view, start, len){
-  let s='';
-  for (let i=0;i<len;i++) s += String.fromCharCode(view.getUint8(start+i));
-  return s;
-}
+function clearBanner(){ banner.style.display='none'; banner.textContent=''; }
+function setOutput(obj){ out.textContent = JSON.stringify(obj, null, 2); console.log('EVALUATION:', obj); }
 
-/* draw oriented image to canvas */
-function drawImageWithOrientation(img, orientation){
-  const c = document.createElement('canvas');
-  let w = img.naturalWidth, h = img.naturalHeight;
-  if (orientation === 6 || orientation === 8) { c.width = h; c.height = w; } else { c.width = w; c.height = h; }
-  const cx = c.getContext('2d');
-  cx.save();
-  if (orientation === 3) { cx.translate(c.width, c.height); cx.rotate(Math.PI); cx.drawImage(img, 0, 0); }
-  else if (orientation === 6) { cx.translate(c.width, 0); cx.rotate(Math.PI/2); cx.drawImage(img, 0, 0); }
-  else if (orientation === 8) { cx.translate(0, c.height); cx.rotate(-Math.PI/2); cx.drawImage(img, 0, 0); }
-  else cx.drawImage(img,0,0);
-  cx.restore();
-  return c;
-}
-
-/* ====== Laplacian variance (blurriness) ====== */
-function laplacianVariance(canvas, downscale=0.25){
-  const w = Math.max(32, Math.round(canvas.width * downscale));
-  const h = Math.max(32, Math.round(canvas.height * downscale));
-  const tmp = document.createElement('canvas'); tmp.width = w; tmp.height = h;
-  const tctx = tmp.getContext('2d'); tctx.drawImage(canvas, 0, 0, w, h);
-  const im = tctx.getImageData(0,0,w,h); const gray = new Float32Array(w*h);
-  for (let i=0,j=0;i<im.data.length;i+=4,j++) gray[j] = 0.299*im.data[i]+0.587*im.data[i+1]+0.114*im.data[i+2];
-  // Laplacian kernel
-  let sum=0, sum2=0, n=0;
-  for (let y=1;y<h-1;y++){
-    for (let x=1;x<w-1;x++){
-      const idx = y*w + x;
-      const v = -gray[idx-w] - gray[idx-1] - gray[idx+1] - gray[idx+w] + 4*gray[idx];
-      sum += v; sum2 += v*v; n++;
-    }
-  }
-  if (n===0) return 0;
-  const mean = sum / n; const variance = (sum2 / n) - (mean*mean);
-  return variance;
-}
-
-/* ====== Geometry helpers & indices ====== */
-/* Indices chosen for stable points (MediaPipe FaceMesh):
-   left eye outer: 33, right eye outer: 263, nose tip: 1, chin: 152,
-   left jaw near ear: 127, right jaw near ear: 356, forehead/top approx: 10
-*/
-const IDX = { leftEye:33, rightEye:263, noseTip:1, chin:152, leftJaw:127, rightJaw:356, forehead:10 };
-
-function computeBoxFromLM(landmarks, canvasEl){
+/* Landmark utilities */
+function computeBoxFromLandmarks(landmarks, canvasEl){
   let minX=1,minY=1,maxX=0,maxY=0;
   for (const p of landmarks){
-    if (!isFinite(p.x) || !isFinite(p.y)) continue;
-    minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
+    if (typeof p.x !== 'number' || typeof p.y !== 'number') continue;
+    if (!isFinite(p.x)||!isFinite(p.y)) continue;
+    minX = Math.min(minX, p.x);
+    minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x);
+    maxY = Math.max(maxY, p.y);
   }
   const w = canvasEl.width, h = canvasEl.height;
-  return { x: minX*w, y: minY*h, w: Math.max(0,(maxX-minX)*w), h: Math.max(0,(maxY-minY)*h) };
+  return { x: minX * w, y: minY * h, w: Math.max(0,(maxX-minX)*w), h: Math.max(0,(maxY-minY)*h) };
 }
 
-function interEyeDistance(landmarks, srcCanvas){
-  const a = landmarks[IDX.leftEye], b = landmarks[IDX.rightEye];
-  if (!a||!b) return null;
-  const dx = (a.x - b.x) * srcCanvas.width;
-  const dy = (a.y - b.y) * srcCanvas.height;
-  return Math.hypot(dx, dy);
-}
-
-function computeRollDeg(landmarks){
-  const a = landmarks[IDX.leftEye], b = landmarks[IDX.rightEye];
-  if (!a||!b) return 0;
-  const angle = Math.atan2(b.y - a.y, b.x - a.x);
-  return angle * 180 / Math.PI;
-}
-
-/* approximate yaw by nose offset relative to eye midpoint (normalized) */
-function approximateYaw(landmarks){
-  const a = landmarks[IDX.leftEye], b = landmarks[IDX.rightEye], n = landmarks[IDX.noseTip];
-  if (!a||!b||!n) return 0;
-  const midX = (a.x + b.x)/2;
-  return n.x - midX; // normalized offset; positive/negative indicates left/right
-}
-
-/* jaw angle at chin: angle between leftJaw - chin - rightJaw in degrees */
-function jawAngleDeg(landmarks){
-  const L = landmarks[IDX.leftJaw], R = landmarks[IDX.rightJaw], C = landmarks[IDX.chin];
-  if (!L||!R||!C) return null;
-  // vectors CL and CR
-  const v1 = { x: L.x - C.x, y: L.y - C.y };
-  const v2 = { x: R.x - C.x, y: R.y - C.y };
-  const dot = v1.x*v2.x + v1.y*v2.y;
-  const mag = Math.hypot(v1.x, v1.y) * Math.hypot(v2.x, v2.y);
-  if (mag === 0) return null;
-  const cos = Math.max(-1, Math.min(1, dot / mag));
-  const angle = Math.acos(cos);
-  return angle * 180 / Math.PI;
-}
-
-/* check core landmark presence */
-function coreLandmarksPresent(landmarks){
-  for (const k of Object.values(IDX)){ if (!landmarks[k] || !isFinite(landmarks[k].x) || !isFinite(landmarks[k].y)) return false; }
+const CORE_IDXS = [33,263,1,13,14]; // left eye, right eye, nose tip, mouth upper/lower
+function coreLandmarksVisible(landmarks){
+  for (const idx of CORE_IDXS){
+    const p = landmarks[idx];
+    if (!p || !isFinite(p.x) || !isFinite(p.y)) return false;
+  }
   return true;
 }
 
-/* ====== Acceptance evaluation ====== */
-function evaluateResult(results){
-  const areaPct = parseFloat(areaRange.value);
-  const blurThresh = parseFloat(blurRange.value);
-  const rollThresh = Math.abs(parseFloat(rollThreshInput.value) || 20);
-  const yawThresh = Math.abs(parseFloat(yawThreshInput.value) || 0.06);
-
-  const faces = results.multiFaceLandmarks || [];
-  const json = { accepted:false, reason:'no_face', faces:faces.length, checks:{}, features:{} };
-
-  if (!sourceCanvas) { json.reason='no_source'; return json; }
-  if (!Array.isArray(faces) || faces.length === 0){ json.reason = 'no_face'; return json;}
-  if (faces.length !== 1){ json.reason = 'multiple_faces'; return json; }
-
-  const lm = faces[0];
-  json.features.corePresent = coreLandmarksPresent(lm);
-  if (!json.features.corePresent){ json.reason = 'core_landmarks_missing'; return json; }
-
-  // bounding box (pixels) on source canvas
-  const box = computeBoxFromLM(lm, sourceCanvas);
-  json.features.bbox = box;
-  json.checks.boxPixels = box.w * box.h;
-  const imageArea = sourceCanvas.width * sourceCanvas.height;
-  const requiredArea = (areaPct/100) * imageArea;
-  json.checks.requiredArea = requiredArea;
-  if (box.w <= 10 || box.h <= 10){ json.reason = 'bbox_too_small_pixels'; return json; }
-  if (json.checks.boxPixels < requiredArea){ json.reason = 'face_too_small_area'; return json; }
-
-  // blur check
-  const blurVar = laplacianVariance(sourceCanvas, 0.25);
-  json.features.blurVariance = blurVar;
-  if (blurVar < blurThresh){ json.reason = 'image_too_blurry'; return json; }
-
-  // inter-eye + normalized measures
-  const eyeDist = interEyeDistance(lm, sourceCanvas);
-  json.features.interEye = eyeDist;
-  if (!eyeDist || eyeDist < 6){ json.reason = 'invalid_eye_distance'; return json; }
-
-  // roll & yaw
-  const roll = computeRollDeg(lm);
-  const yaw = approximateYaw(lm);
-  json.features.rollDeg = roll;
-  json.features.yaw = yaw;
-  if (Math.abs(roll) > rollThresh){ json.reason = 'face_tilted_roll'; return json; }
-  if (Math.abs(yaw) > yawThresh){ json.reason = 'face_yawed_side'; return json; }
-
-  // jaw angle
-  const jawAng = jawAngleDeg(lm);
-  json.features.jawAngleDeg = jawAng;
-  if (!jawAng || !isFinite(jawAng)){ json.reason = 'invalid_jaw_angle'; return json; }
-
-  // All checks passed
-  json.accepted = true;
-  json.reason = 'one_face_detected';
-  // Add shape and other features (optional) - keep simple: length/width ratio:
-  const boxAspect = (box.h / box.w);
-  json.features.boxAspect = boxAspect;
-  json.features.boxAreaRatio = json.checks.boxPixels / imageArea;
-
-  return json;
-}
-
-/* ====== Drawing helpers (map source coords to preview) ====== */
-function mapPointToPreview(p){
-  // sourceCanvas -> preview (we scale uniformly)
-  const sx = preview.width / sourceCanvas.width;
-  const sy = preview.height / sourceCanvas.height;
-  return { x: p.x * sourceCanvas.width * sx, y: p.y * sourceCanvas.height * sy };
-}
-
-function drawOverlay(landmarks){
-  ctx.clearRect(0,0,overlay.width, overlay.height);
-  if (!landmarks || !sourceCanvas) return;
-  // draw landmarks as points
-  ctx.fillStyle = '#FFDD77'; ctx.beginPath();
-  for (const p of landmarks){
-    const pt = mapPointToPreview(p);
-    ctx.moveTo(pt.x+1, pt.y); ctx.arc(pt.x, pt.y, 1.4, 0, Math.PI*2);
+/* face-shape measurement: compute widths at three relative heights and length */
+function measureFace(landmarks, canvasEl){
+  // landmarks are normalized wrt source image used by model (we pass uploadedCanvas)
+  // compute minY and maxY normalized
+  let minY=1, maxY=0;
+  for (const p of landmarks){ if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y; }
+  const heightN = maxY - minY;
+  if (!(heightN > 0)) return null;
+  // sample three Y positions: top = minY + 0.12*height, cheek = minY + 0.45*height, jaw = minY + 0.8*height
+  const yNorms = [minY + 0.12*heightN, minY + 0.45*heightN, minY + 0.80*heightN];
+  const widths = [];
+  for (const yTarget of yNorms){
+    // find landmarks near this yTarget; expand band if necessary
+    let band = 0.015;
+    let left = 1, right = 0;
+    let found = false;
+    for (let attempt=0; attempt<6; attempt++){
+      left = 1; right = 0; found = false;
+      for (const p of landmarks){
+        if (Math.abs(p.y - yTarget) <= band){
+          left = Math.min(left, p.x);
+          right = Math.max(right, p.x);
+          found = true;
+        }
+      }
+      if (found) break;
+      band *= 2;
+    }
+    if (!found) {
+      // fallback: approximate left/right from min/max x of all points
+      let minX=1,maxX=0;
+      for (const p of landmarks){ minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); }
+      widths.push({normW: maxX - minX, leftN: minX, rightN: maxX});
+    } else {
+      widths.push({normW: right - left, leftN: left, rightN: right});
+    }
   }
-  ctx.fill();
-  // draw bbox
-  const box = computeBoxFromLM(landmarks, sourceCanvas);
-  const sx = preview.width / sourceCanvas.width;
-  const sy = preview.height / sourceCanvas.height;
-  ctx.strokeStyle = '#06b6d4'; ctx.lineWidth = 2;
-  ctx.strokeRect(box.x * sx, box.y * sy, box.w * sx, box.h * sy);
+  // face length normalized:
+  const lengthN = heightN;
+  // convert to pixels for source canvas:
+  const wPx = canvasEl.width, hPx = canvasEl.height;
+  const widthsPx = widths.map(w => ({px: w.normW * wPx, left: w.leftN * wPx, right: w.rightN * wPx}));
+  const lengthPx = lengthN * hPx;
+  return { lengthPx, widthsPx, widthsNorm: widths.map(w=>w.normW), lengthNorm: lengthN };
+}
 
-  // draw measurement markers for key indices
-  const keys = ['leftEye','rightEye','noseTip','chin','leftJaw','rightJaw','forehead'];
-  ctx.fillStyle = '#fff';
-  keys.forEach(k => {
-    const idx = IDX[k];
-    if (!landmarks[idx]) return;
-    const pt = mapPointToPreview(landmarks[idx]);
-    ctx.beginPath(); ctx.arc(pt.x, pt.y, 3.2, 0, Math.PI*2); ctx.fill();
-    ctx.fillStyle = '#000'; ctx.font = '11px sans-serif'; ctx.fillText(k, pt.x+6, pt.y+3); ctx.fillStyle = '#fff';
+/* classify shape using heuristics */
+function classifyShape(measure){
+  if (!measure) return {shape:'unknown', scores:null};
+  const top = measure.widthsNorm[0], cheek = measure.widthsNorm[1], jaw = measure.widthsNorm[2];
+  const len = measure.lengthNorm;
+  const avgWidth = (top + cheek + jaw)/3;
+  const lenOverWidth = len / avgWidth;
+  // compute normalized ratios
+  const jawToCheek = jaw / cheek;
+  const topToCheek = top / cheek;
+  // heuristics (ordered)
+  if (lenOverWidth > 1.4) return {shape:'oblong/long', reason:`len/width=${lenOverWidth.toFixed(2)}`};
+  // round: len ~ width and widths similar
+  if (lenOverWidth >= 0.9 && lenOverWidth <= 1.15 && Math.abs(top-cheek) < 0.06 && Math.abs(cheek-jaw) < 0.06) return {shape:'round', reason:`len/width=${lenOverWidth.toFixed(2)}`};
+  // square: len ~ width and jaw ~ cheek ~ top but angular — here jaw close to cheek and len similar
+  if (lenOverWidth >= 0.9 && lenOverWidth <= 1.15 && Math.abs(jawToCheek - 1) < 0.08) return {shape:'square', reason:`jaw/cheek=${jawToCheek.toFixed(2)}`};
+  // heart: top > cheek and jaw noticeably narrower
+  if (topToCheek > 1.06 && jawToCheek < 0.9) return {shape:'heart', reason:`top/cheek=${topToCheek.toFixed(2)}, jaw/cheek=${jawToCheek.toFixed(2)}`};
+  // diamond: cheek is largest, top and jaw narrower
+  if (cheek > top && cheek > jaw && Math.abs(top - jaw) < 0.12) return {shape:'diamond', reason:`cheek largest`};
+  // oval: len > width and jaw narrower than cheek
+  if (lenOverWidth > 1.15 && jawToCheek < 0.95) return {shape:'oval', reason:`len/width=${lenOverWidth.toFixed(2)}, jaw/cheek=${jawToCheek.toFixed(2)}`};
+  // fallback: choose closest by ratios
+  // prefer oval if len slightly > width
+  if (lenOverWidth > 1.15) return {shape:'oval', reason:`fallback len/width=${lenOverWidth.toFixed(2)}`};
+  return {shape:'unknown', reason:'no heuristic matched'};
+}
+
+/* draw measurement guides on overlay (scaled to preview) */
+function drawMeasureGuides(measure, srcCanvas){
+  octx.clearRect(0,0,overlay.width,overlay.height);
+  if (!measure) return;
+  const sx = overlay.width / srcCanvas.width;
+  const sy = overlay.height / srcCanvas.height;
+  octx.lineWidth = 2;
+  // draw horizontal lines and labels for top/cheek/jaw
+  const colors = ['#f59e0b','#06b6d4','#ef4444'];
+  ['Top','Cheek','Jaw'].forEach((label,i)=>{
+    const w = measure.widthsPx[i];
+    const y = ( (w.left + w.right) ? ( (w.left + w.right)/2 ) : ( (measure.lengthPx/2) ) ); // not used
+    // calculate y position using the normalized positions: average y of landmarks in that band would be better but we don't have that; we'll estimate by using left/right midpoints' y derived from their normalized indices earlier is not present — instead compute y from canvas: use proportional positions from widthsNorm indices
+    // Simpler: compute normalized y from earlier method by mapping stored normalized positions: we'll instead compute an approximate y by scanning landmarks - but to keep it simple draw lines at relative vertical fractions: top ~ 0.12, cheek ~0.45, jaw ~0.8 of preview height within face bbox
+  });
+  // Instead compute face bbox on src canvas and draw lines relative to that
+  // Attempt to compute normalized bbox from landmarks again:
+  // find minY/maxY from uploaded canvas landmarks (we require that be available as measure provides lengthNorm)
+  // We'll draw 3 horizontal lines inside the face vertical span:
+  const previewW = overlay.width, previewH = overlay.height;
+  const faceTopY = previewH * ( (1 - measure.lengthNorm)/2 + 0.05 ); // approximate centering — simpler: put lines relative to preview height
+  const topY = previewH * 0.28;
+  const cheekY = previewH * 0.50;
+  const jawY = previewH * 0.72;
+  [topY,cheekY,jawY].forEach((yy,i) => {
+    octx.strokeStyle = colors[i];
+    octx.beginPath();
+    octx.moveTo(8, yy);
+    octx.lineTo(previewW-8, yy);
+    octx.stroke();
+    octx.fillStyle = colors[i];
+    octx.font = '12px sans-serif';
+    octx.fillText(['Top','Cheek','Jaw'][i], 12, yy - 6);
+  });
+  // draw small legend of pixel widths
+  octx.fillStyle = '#fff';
+  octx.font = '12px sans-serif';
+  octx.fillText(`Top:${Math.round(measure.widthsPx[0].px)}px Cheek:${Math.round(measure.widthsPx[1].px)}px Jaw:${Math.round(measure.widthsPx[2].px)}px Len:${Math.round(measure.lengthPx)}px`, 10, overlay.height - 12);
+}
+
+/* Strict acceptance logic (same as earlier) */
+function evaluateDetection(results, sourceCanvas, areaThresholdPct){
+  const faces = results.multiFaceLandmarks || [];
+  const imageArea = sourceCanvas.width * sourceCanvas.height;
+  const response = { accepted:false, reason:'no_face', faces: faces.length, bbox:null, shape:'unknown', measures:null, checks:{} };
+
+  if (faces.length === 0){
+    response.reason = 'no_face';
+    response.checks.faces = 0;
+    return response;
+  }
+  if (faces.length !== 1){
+    response.reason = 'multiple_faces';
+    response.checks.faces = faces.length;
+    return response;
+  }
+  const landmarks = faces[0];
+  response.checks.coreLandmarksPresent = coreLandmarksVisible(landmarks);
+  if (!response.checks.coreLandmarksPresent){
+    response.reason = 'core_landmarks_missing';
+    return response;
+  }
+  const box = computeBoxFromLandmarks(landmarks, sourceCanvas);
+  response.bbox = { x: Math.round(box.x), y: Math.round(box.y), w: Math.round(box.w), h: Math.round(box.h) };
+  if (!isFinite(box.w) || !isFinite(box.h) || box.w <= 0 || box.h <= 0){
+    response.reason = 'invalid_bbox';
+    return response;
+  }
+  const boxArea = box.w * box.h;
+  const thresholdArea = (areaThresholdPct/100) * imageArea;
+  response.checks.boxPixels = boxArea;
+  response.checks.imagePixels = imageArea;
+  response.checks.thresholdPixels = thresholdArea;
+  if (boxArea < thresholdArea) { response.reason = 'face_too_small'; return response; }
+  if (box.w < 10 || box.h < 10) { response.reason = 'bbox_too_narrow'; return response; }
+
+  // all basic checks passed -> measure & classify
+  const measure = measureFace(landmarks, sourceCanvas);
+  response.measures = measure;
+  const cls = classifyShape(measure);
+  response.shape = cls.shape;
+  response.shapeReason = cls.reason;
+
+  response.accepted = true;
+  response.reason = 'one_face_detected';
+  return response;
+}
+
+/* MediaPipe setup */
+const faceMesh = new FaceMesh({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
+faceMesh.setOptions({ maxNumFaces: 2, refineLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+
+faceMesh.onResults(async (results) => {
+  if (!uploadedCanvas) { setOutput({accepted:false,reason:'no_source'}); showBanner(false,'No image'); return; }
+  const res = evaluateDetection(results, uploadedCanvas, parseFloat(area.value));
+  setOutput(res);
+  shapeText.textContent = 'Face shape: ' + (res.shape || '—');
+  if (!res.accepted){
+    showBanner(false, res.reason.replace(/_/g,' ').toUpperCase());
+    octx.clearRect(0,0,overlay.width, overlay.height);
+    // if faces exist, draw their boxes scaled to preview for debugging
+    if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0){
+      for (const f of results.multiFaceLandmarks){
+        drawOverlayForFace(f, uploadedCanvas);
+      }
+    }
+    return;
+  }
+  showBanner(true, 'ACCEPTED — ' + res.shape.toUpperCase());
+  // draw overlay with measurements scaled to preview
+  drawOverlayForFace(results.multiFaceLandmarks[0], uploadedCanvas);
+  const measure = res.measures;
+  if (measure) {
+    drawMeasureGuides(measure, uploadedCanvas);
+  }
+});
+
+/* helper: draw overlay scaled to preview (points + bbox) */
+function drawOverlayForFace(landmarks, srcCanvas){
+  octx.clearRect(0,0,overlay.width, overlay.height);
+  if (!landmarks) return;
+  const sx = overlay.width / srcCanvas.width;
+  const sy = overlay.height / srcCanvas.height;
+  // draw points
+  octx.fillStyle = '#FFDD77';
+  for (const p of landmarks){
+    const px = p.x * srcCanvas.width * sx;
+    const py = p.y * srcCanvas.height * sy;
+    octx.beginPath();
+    octx.arc(px, py, 1.6, 0, Math.PI*2);
+    octx.fill();
+  }
+  // draw bbox
+  const box = computeBoxFromLandmarks(landmarks, srcCanvas);
+  octx.strokeStyle = '#06b6d4';
+  octx.lineWidth = 2;
+  octx.strokeRect(box.x * sx, box.y * sy, box.w * sx, box.h * sy);
+}
+
+/* Load file -> create uploadedCanvas (source-of-truth) -> preview -> send to faceMesh */
+function loadImageFile(file){
+  return new Promise((resolve,reject) => {
+    if (!file) return reject('no_file');
+    if (file.size > 8 * 1024 * 1024) return reject('file_too_large');
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth;
+      c.height = img.naturalHeight;
+      const cx = c.getContext('2d');
+      cx.drawImage(img,0,0);
+      resolve(c);
+      URL.revokeObjectURL(img.src);
+    };
+    img.onerror = ()=> reject('invalid_image');
+    img.src = URL.createObjectURL(file);
   });
 }
 
-/* ====== Results handler ====== */
-function handleResults(results){
-  hideSpinner();
-  const evalJson = evaluateResult(results);
-  lastResult = evalJson;
-  jsonOut.textContent = JSON.stringify(evalJson, null, 2);
-  if (!evalJson.accepted){
-    showBanner(false, readableReason(evalJson.reason));
-    // draw overlays if faces exist for debug
-    if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) drawOverlay(results.multiFaceLandmarks[0]);
-    return;
-  }
-  showBanner(true, 'ACCEPTED');
-  // draw overlay for first face
-  drawOverlay(results.multiFaceLandmarks[0]);
+function drawPreviewFromSource(srcCanvas){
+  if (!srcCanvas) return;
+  const sw = preview.clientWidth, sh = preview.clientHeight;
+  const scale = Math.min(sw / srcCanvas.width, sh / srcCanvas.height);
+  preview.width = Math.round(srcCanvas.width * scale);
+  preview.height = Math.round(srcCanvas.height * scale);
+  overlay.width = preview.width;
+  overlay.height = preview.height;
+  pctx.clearRect(0,0,preview.width,preview.height);
+  pctx.drawImage(srcCanvas, 0, 0, preview.width, preview.height);
 }
 
-/* human-readable reasons */
-function readableReason(code){
-  const map = {
-    no_face:'No face found — try a clearer photo.',
-    multiple_faces:'Multiple faces detected — upload a single-face photo.',
-    core_landmarks_missing:'Essential landmarks missing — try facing camera more directly.',
-    bbox_too_small_pixels:'Detected face too small (low resolution).',
-    face_too_small_area:'Face area too small — move closer.',
-    image_too_blurry:'Image blurry — use a sharper photo.',
-    invalid_eye_distance:'Invalid inter-eye distance — bad detection.',
-    face_tilted_roll:'Face tilted — please face the camera straight.',
-    face_yawed_side:'Face turned sideways — face camera directly.',
-    invalid_jaw_angle:'Invalid jaw angle — try a frontal image.',
-    invalid_image_or_too_large:'Invalid image or file too large.'
-  };
-  return map[code] || (code || 'Unknown reason');
-}
-
-/* ====== UI flows ====== */
+/* UI flows */
 upload.addEventListener('change', async (e) => {
-  clearBanner(); ctx.clearRect(0,0,overlay.width, overlay.height); jsonOut.textContent='{}'; lastResult={};
+  clearBanner(); octx.clearRect(0,0,overlay.width,overlay.height); setOutput({});
+  shapeText.textContent = 'Face shape: —';
   const f = e.target.files && e.target.files[0];
   if (!f) return;
-  if (f.size > MAX_UPLOAD_BYTES) { showBanner(false, 'File too large (max 8MB)'); jsonOut.textContent = JSON.stringify({accepted:false,reason:'file_too_large'}); return; }
-  showSpinner();
   try {
-    const ori = await readImageOrientation(f).catch(()=>1);
-    const img = new Image();
-    img.onload = async () => {
-      // canonical rotated canvas
-      sourceCanvas = drawImageWithOrientation(img, ori);
-      // preview size: fit stage keeping aspect, preview canvas resized accordingly
-      fitPreviewToStage();
-      // draw onto preview
-      pctx.clearRect(0,0,preview.width, preview.height);
-      pctx.drawImage(sourceCanvas, 0, 0, preview.width, preview.height);
-      // Send the sourceCanvas (natural res) to FaceMesh for one-shot detection
-      await faceMesh.send({image: sourceCanvas});
-    };
-    img.onerror = ()=> { hideSpinner(); showBanner(false,'Invalid image'); jsonOut.textContent = JSON.stringify({accepted:false,reason:'invalid_image'}); };
-    img.src = URL.createObjectURL(f);
+    uploadedCanvas = await loadImageFile(f);
   } catch (err){
-    hideSpinner(); console.error(err); showBanner(false,'Processing error'); jsonOut.textContent = JSON.stringify({accepted:false,reason:'processing_error',error:String(err)});
+    showBanner(false, 'Invalid image or too large');
+    setOutput({accepted:false,reason:'invalid_image'});
+    return;
+  }
+  drawPreviewFromSource(uploadedCanvas);
+  try {
+    await faceMesh.send({image: uploadedCanvas});
+  } catch (err){
+    console.error(err);
+    showBanner(false,'Model error');
+    setOutput({accepted:false,reason:'model_error',error:String(err)});
   }
 });
 
-recheckBtn.addEventListener('click', async () => {
-  clearBanner(); ctx.clearRect(0,0,overlay.width,overlay.height);
-  if (!sourceCanvas) { showBanner(false,'No image to recheck'); return; }
-  showSpinner();
-  // redraw preview
-  pctx.clearRect(0,0,preview.width, preview.height); pctx.drawImage(sourceCanvas, 0, 0, preview.width, preview.height);
-  await faceMesh.send({image: sourceCanvas});
+$('recheck').addEventListener('click', async () => {
+  if (!uploadedCanvas) { showBanner(false,'No image'); return; }
+  clearBanner(); octx.clearRect(0,0,overlay.width,overlay.height);
+  try { await faceMesh.send({image: uploadedCanvas}); } catch(e){ console.error(e); showBanner(false,'Model error'); }
 });
 
-clearBtn.addEventListener('click', () => {
-  sourceCanvas = null; pctx.clearRect(0,0,preview.width, preview.height); ctx.clearRect(0,0,overlay.width,overlay.height);
-  upload.value = ''; jsonOut.textContent='{}'; clearBanner();
+$('clear').addEventListener('click', () => {
+  uploadedCanvas = null;
+  pctx.clearRect(0,0,preview.width, preview.height);
+  octx.clearRect(0,0,overlay.width, overlay.height);
+  $('upload').value = '';
+  clearBanner();
+  setOutput({});
+  shapeText.textContent = 'Face shape: —';
 });
 
-/* preview fit */
-function fitPreviewToStage(){
-  if (!sourceCanvas) return;
-  const stageW = preview.clientWidth || 640, stageH = preview.clientHeight || 480;
-  // compute scale to fit
-  const scale = Math.min(640 / sourceCanvas.width, 480 / sourceCanvas.height);
-  preview.width = Math.round(sourceCanvas.width * scale);
-  preview.height = Math.round(sourceCanvas.height * scale);
-  overlay.width = preview.width; overlay.height = preview.height;
-  // center via CSS by setting canvas styles (here they are placed absolute 0,0; we keep it simple)
-}
-
-/* spinner & banner */
-function showSpinner(){ spinner.style.display = 'block'; }
-function hideSpinner(){ spinner.style.display = 'none'; }
-function showBanner(ok, text){
-  banner.style.display = 'block'; banner.textContent = text;
-  banner.className = 'banner ' + (ok ? 'ok' : 'bad');
-}
-function clearBanner(){ banner.style.display = 'none'; banner.textContent = ''; banner.className = ''; }
-
-/* init placeholders */
+/* init canvas */
 (function init(){
   preview.width = 640; preview.height = 480; overlay.width = 640; overlay.height = 480;
-  pctx.fillStyle = '#020718'; pctx.fillRect(0,0,preview.width, preview.height);
-  pctx.fillStyle = '#6b7280'; pctx.font='14px sans-serif'; pctx.fillText('Upload an image to analyze (front-facing recommended)', 12, 28);
-  jsonOut.textContent = '{}';
+  pctx.fillStyle = '#020814'; pctx.fillRect(0,0,preview.width, preview.height);
+  pctx.fillStyle = '#6b7280'; pctx.font = '14px Inter, sans-serif';
+  pctx.fillText('Upload image to analyze face shape', 14, 28);
 })();
 </script>
 </body>
